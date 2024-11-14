@@ -1,0 +1,113 @@
+Use database proyect_3;
+
+
+
+WITH 
+-- CTE para obtener el primer mensaje del repartidor (courier_tmsg)
+courier_messages AS (
+    SELECT
+        order_id,
+        TO_TIMESTAMP(MIN(message_sent_time), 'DD/MM/YYYY HH24:MI') AS courier_tmsg
+    FROM chat_messages
+    WHERE from_id = courier_id
+    GROUP BY order_id
+),
+
+-- CTE para obtener el primer mensaje del cliente (customer_tmsg)
+customer_messages AS (
+    SELECT
+        order_id,
+        TO_TIMESTAMP(MIN(message_sent_time), 'DD/MM/YYYY HH24:MI') AS customer_tmsg
+    FROM chat_messages
+    WHERE from_id = customer_id
+    GROUP BY order_id
+),
+
+-- CTE para obtener el número de mensajes del repartidor (courier_nmsg)
+courier_message_count AS (
+    SELECT
+        order_id,
+        COUNT(*) AS courier_nmsg
+    FROM chat_messages
+    WHERE from_id = courier_id
+    GROUP BY order_id
+),
+
+-- CTE para obtener el número de mensajes del cliente (client_nmsg)
+customer_message_count AS (
+    SELECT
+        order_id,
+        COUNT(*) AS client_nmsg
+    FROM chat_messages
+    WHERE from_id = customer_id
+    GROUP BY order_id
+),
+
+-- CTE para indicar quién inició la conversación (started_by)
+first_messages AS (
+    SELECT
+        order_id,
+        TO_TIMESTAMP(MIN(message_sent_time), 'DD/MM/YYYY HH24:MI') AS time_first_message,
+        CASE 
+            WHEN MIN(chat_started_by_message) = 't' THEN 'courier'  -- Si es 't', el repartidor inició la conversación
+            WHEN MIN(chat_started_by_message) = 'f' THEN 'customer' -- Si es 'f', el cliente inició la conversación
+            ELSE 'unknown'
+        END AS started_by
+    FROM chat_messages
+    GROUP BY order_id
+),
+
+-- CTE para calcular el tiempo de respuesta del cliente (replying_time)
+replying_times AS (
+    SELECT
+        o.order_id,
+        ABS(DATEDIFF('second', cm1.courier_tmsg, cm2.customer_tmsg)) AS replying_time  -- Diferencia en segundos siempre positiva
+    FROM orders o
+    LEFT JOIN courier_messages cm1 ON o.order_id = cm1.order_id  -- Unir con el primer mensaje del repartidor
+    LEFT JOIN customer_messages cm2 ON o.order_id = cm2.order_id  -- Unir con el primer mensaje del cliente
+),
+
+-- CTE para obtener el último mensaje de la conversación (last_message)
+last_messages AS (
+    SELECT
+        order_id,
+        TO_TIMESTAMP(MAX(message_sent_time), 'DD/MM/YYYY HH24:MI') AS last_message
+    FROM chat_messages
+    GROUP BY order_id
+),
+
+-- CTE para obtener el último order_stage, que es el stage_last_message
+order_stage_info AS (
+    SELECT 
+        order_id,
+        order_stage AS stage_last_message  -- Usar order_stage como stage_last_message
+    FROM chat_messages cm
+    WHERE cm.message_sent_time = (
+        SELECT MAX(message_sent_time)
+        FROM chat_messages
+        WHERE order_id = cm.order_id
+    )
+)
+
+-- Consulta final con uniones de todas las CTEs
+SELECT
+    o.order_id,
+    o.city_code,
+    cm.courier_tmsg,
+    cm2.customer_tmsg,
+    cm3.courier_nmsg,
+    cm4.client_nmsg,
+    fm.time_first_message,
+    fm.started_by,  -- Indica quién inició la conversación
+    rt.replying_time,
+    lm.last_message,
+    osi.stage_last_message  -- Ahora stage_last_message es directamente el order_stage
+FROM orders o
+LEFT JOIN courier_messages cm ON o.order_id = cm.order_id
+LEFT JOIN customer_messages cm2 ON o.order_id = cm2.order_id
+LEFT JOIN courier_message_count cm3 ON o.order_id = cm3.order_id
+LEFT JOIN customer_message_count cm4 ON o.order_id = cm4.order_id
+LEFT JOIN first_messages fm ON o.order_id = fm.order_id
+LEFT JOIN replying_times rt ON o.order_id = rt.order_id
+LEFT JOIN last_messages lm ON o.order_id = lm.order_id
+LEFT JOIN order_stage_info osi ON o.order_id = osi.order_id;
